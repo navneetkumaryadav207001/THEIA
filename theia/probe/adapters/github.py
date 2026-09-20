@@ -4,6 +4,7 @@ from theia.core.schemas.platform_type import PlatformType
 from theia.core.schemas.seed import InvestigationSeed
 from theia.core.schemas.seed_type import SeedType
 from theia.core.schemas.profile import CandidateProfile, RawSnapshot
+from datetime import datetime
 import httpx
 
 
@@ -26,7 +27,19 @@ class GithubAdapter(BasePlatformAdapter):
 
         if response.status_code == 404:
             return None
+        
         if response.status_code == 200:
+            activity_url = f"https://api.github.com/users/{seed.value}/events/public"
+            activity_response = await self.client.get(
+                        url=activity_url, 
+                        headers={
+                            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+                        }
+                    )
+            timestamps = {}
+            for event in activity_response.json():
+                dt = datetime.fromisoformat(event["created_at"].replace("Z", "+00:00"))
+                timestamps[dt] = event["type"]
             raw = response.content
             json = response.json()
             snapshot = RawSnapshot(raw=raw, url = url, platform=self.platform_type)
@@ -39,5 +52,6 @@ class GithubAdapter(BasePlatformAdapter):
                 platform = self.platform_type,
                 location_raw = json.get("location"),
                 raw_snapshot_hash = snapshot.sha_256,
+                observed_timestamps=timestamps if timestamps else None
             )
             return profile,snapshot

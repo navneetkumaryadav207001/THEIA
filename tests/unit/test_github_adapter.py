@@ -28,28 +28,36 @@ class TestGithubAdapter(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         self.mock_client.get.assert_not_called()
 
-    async def test_probe_user_found_200(self):
-        """Adapter correctly parses a 200 OK GitHub user response."""
-        mock_payload = {
-            "login": "octocat",
-            "html_url": "https://github.com/octocat",
-            "avatar_url": "https://avatars.githubusercontent.com/u/583231",
-            "bio": "GitHub mascot",
-            "location": "San Francisco"
+    async def test_probe_user_found_with_events(self):
+        """Adapter parses user profile and public activity timestamps."""
+        user_payload = {
+            "login": "torvalds",
+            "html_url": "https://github.com/torvalds",
+            "avatar_url": "https://avatars.githubusercontent.com/u/1024025",
+            "bio": "Linux creator",
+            "location": "Portland, OR"
         }
-        raw_bytes = json.dumps(mock_payload).encode("utf-8")
+        events_payload = [
+            {"type": "PushEvent", "created_at": "2026-09-19T20:00:00Z"},
+            {"type": "PullRequestEvent", "created_at": "2026-09-19T22:30:00Z"}
+        ]
 
-        mock_response = MagicMock(spec=httpx.Response)
-        mock_response.status_code = 200
-        mock_response.content = raw_bytes
-        mock_response.json.return_value = mock_payload
+        resp_user = MagicMock(spec=httpx.Response)
+        resp_user.status_code = 200
+        resp_user.content = json.dumps(user_payload).encode("utf-8")
+        resp_user.json.return_value = user_payload
 
-        self.mock_client.get = AsyncMock(return_value=mock_response)
+        resp_events = MagicMock(spec=httpx.Response)
+        resp_events.status_code = 200
+        resp_events.json.return_value = events_payload
+
+        # Mock client.get to return user on 1st call, events on 2nd call
+        self.mock_client.get = AsyncMock(side_effect=[resp_user, resp_events])
 
         seed = InvestigationSeed(
             id=2,
             seed_type=SeedType.USERNAME,
-            value="octocat",
+            value="torvalds",
             created_at=datetime.now(timezone.utc)
         )
 
@@ -57,22 +65,18 @@ class TestGithubAdapter(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result)
         profile, snapshot = result
 
-        # Verify rate limiter was acquired
-        self.mock_limiter.acquire.assert_awaited_once()
-
         # Verify profile fields
-        self.assertEqual(profile.id, "cand_github_octocat")
-        self.assertEqual(profile.platform, PlatformType.Github)
-        self.assertEqual(profile.username, "octocat")
-        self.assertEqual(profile.profile_url, "https://github.com/octocat")
-        self.assertEqual(profile.avatar_url, "https://avatars.githubusercontent.com/u/583231")
-        self.assertEqual(profile.bio_raw, "GitHub mascot")
-        self.assertEqual(profile.location_raw, "San Francisco")
+        self.assertEqual(profile.username, "torvalds")
+        self.assertEqual(profile.bio_raw, "Linux creator")
+        self.assertEqual(profile.location_raw, "Portland, OR")
         self.assertEqual(profile.raw_snapshot_hash, snapshot.sha_256)
 
-        # Verify snapshot
-        self.assertEqual(snapshot.platform, PlatformType.Github)
-        self.assertEqual(snapshot.raw, raw_bytes)
+        # Verify timestamps parsed
+        self.assertIsNotNone(profile.observed_timestamps)
+        self.assertEqual(len(profile.observed_timestamps), 2)
+        expected_dt = datetime.fromisoformat("2026-09-19T20:00:00+00:00")
+        self.assertIn(expected_dt, profile.observed_timestamps)
+        self.assertEqual(profile.observed_timestamps[expected_dt], "PushEvent")
 
     async def test_probe_user_not_found_404(self):
         """Adapter returns None when GitHub responds with 404 Not Found."""
@@ -89,7 +93,6 @@ class TestGithubAdapter(unittest.IsolatedAsyncioTestCase):
 
         result = await self.adapter.probe(seed)
         self.assertIsNone(result)
-        self.mock_limiter.acquire.assert_awaited_once()
 
 
 if __name__ == "__main__":

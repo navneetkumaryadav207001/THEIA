@@ -35,7 +35,6 @@ class RedditAdapter(BasePlatformAdapter):
         data = payload.get("data")
         if not data or data.get("is_suspended"):
             return None
-
         snapshot = RawSnapshot(raw=raw, url=url, platform=self.platform_type)
 
         subreddit = data.get("subreddit") or {}
